@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+  BackupReportBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join [ '', [ 'new-backup-report-based-arn-tags-' , !Ref 'AWS::AccountId'] ]
+      VersioningConfiguration:
+        Status: Enabled
+
+  CostReportBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join [ '', [ 'cost-report-for-quicksight-' , !Ref 'AWS::AccountId'] ]
+      VersioningConfiguration:
+        Status: Enabled
+  
+  AthenaBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join [ '', [ 'aws-athena-query-results-us-east-1-' , !Ref 'AWS::AccountId'] ]
+      VersioningConfiguration:
+        Status: Enabled
+
+  PermissionForEventsToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref LambdaFunctions
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RefreshSchedule.Arn
+
+  RefreshSchedule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Trigger Lambda
+      Name: RefreshSchedule
+      ScheduleExpression: cron(0 */12 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt
+          - LambdaFunctions
+          - Arn
+          Id: RefreshSchedule
+    
+  AWSBackupRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service: quicksight.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AdministratorAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  LambdaFunctions:
+    Type: 'AWS::Lambda::Function'
+    Properties: 
+      Handler: functions/lambda_function.lambda_handler
+      Role: !GetAtt 
+      - AWSBackupRole
+      - Arn
+      Code:
+        S3Bucket: bucket-for-my-function
+        S3Key: functions.zip
+      Environment: 
+        Variables:
+          ConfigDataRefreshScheduleName: RefreshSchedule
+      Runtime: python3.9
+      Timeout: 300
+  
+  TriggerLambdaFunction:
+    Type: Custom::TriggerLambdaFunction
+    Properties:
+      ServiceToken: !GetAtt LambdaFunctions.Arn
+
+
+  GlueRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: 'sts:AssumeRole'
+        Path: /
+        Policies:
+          - PolicyName: root
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action: '*'
+                  Resource: '*'
+
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Join [ '', [ 'database_' , !Ref 'AWS::AccountId'] ]
+
+  CostGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Join [ '', [ 'cost_database_' , !Ref 'AWS::AccountId'] ]
+
+
+  AthenaDefaultWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: default
+      Description: My WorkGroup
+      State: ENABLED
+      WorkGroupConfiguration:
+        BytesScannedCutoffPerQuery: 200000000
+        EnforceWorkGroupConfiguration: false
+        PublishCloudWatchMetricsEnabled: false
+        RequesterPaysEnabled: true
+        ResultConfiguration:
+          OutputLocation: !Join [ '', [ 's3://aws-athena-query-results-us-east-1-' , !Ref 'AWS::AccountId'] ]

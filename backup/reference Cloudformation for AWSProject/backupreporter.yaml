@@ -1,0 +1,1209 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Reporter component of the Backup Observer Solution For AWS Backup 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Reporter Configuration
+        Parameters: 
+            - ReportRecipient
+            - ReportGenerationHour
+            - ReportGenerationMinute
+            - LogsBucketName            
+      - Label:
+          default: Binary Location
+        Parameters: 
+            - StackBinaryURL 
+    ParameterLabels:
+      LogsBucketName:
+        default: S3 Bucket for Backup Observer Logs and Data 
+      ReportGenerationHour:
+        default: Hour (in UTC) when report(s) are generated 
+      ReportGenerationMinute:
+        default: Minute (in UTC) when report(s) are generated
+      ReportRecipient:
+        default: Recipient Email Addresses for Backup Report(s)
+      StackBinaryURL:
+        default: The URL for the StackBinary Zip File 
+Parameters:
+  StackBinaryURL:
+    Description: The URL for the StackBinary Zip File
+    Type: String    
+    Default: 'https://awsstorageblogresources.s3.us-west-2.amazonaws.com/backupobserverblog/bos-for-aws-backup.zip'
+  ReportRecipient:
+    Description: Comma Separated Email Id list for Report Delivery.
+    Type: String
+  ReportGenerationHour:
+    Description: Hour in UTC when the reports need to be delivered
+    Default: '23'
+    Type: String
+    AllowedValues: ['00','01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20','21','22','23']  
+  ReportGenerationMinute:
+    Description: Minutes in UTC when the reports need to be delivered
+    Default: '55'
+    Type: String
+    AllowedValues: ['00','05','10','15','20','25','30','35','40','45','50','55']      
+  LogsBucketName:
+    Description: The S3 Bucket Name where the Job Logs and Reports are to be stored. 
+    Type: String
+Resources: 
+  LocalCacheBucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true      
+  CleanupLocalCacheBucketOnDelete:
+    Type: Custom::CleanupBucket
+    Properties:
+      ServiceToken: !GetAtt GlobalCfnCodeReplicatorLambda.Arn
+      S3BucketToCleanup: !Ref LocalCacheBucket  
+  CopySolutionToLocalCacheBucket:
+    Type: Custom::ReplicateSolutionBinaries
+    Properties:
+      ServiceToken: !GetAtt GlobalCfnCodeReplicatorLambda.Arn
+      SolutionDestinationBucket: !Ref LocalCacheBucket
+      SolutionURL: !Ref StackBinaryURL
+
+  GlobalCfnCodeReplicatorLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W89
+              reason: "NA"
+            - id: W92
+              reason: "NA"    
+    Properties:
+      Code:
+        ZipFile: |-
+          #!/usr/bin/env python
+          # -*- coding: utf-8 -*-
+          import json
+          import boto3
+          import urllib3
+          import os
+          import shutil
+          from urllib.parse import urlparse
+          physical_resource_id = 'GlobalCfnCodeReplicator'  
+          def process_bucket_cleanup_request(bucket_name):
+              print(f"process_bucket_cleanup_request starting for bucket_name : {bucket_name}")
+              s3 = boto3.resource('s3')
+              bucket_to_delete = s3.Bucket(bucket_name)
+              response = bucket_to_delete.objects.all().delete()
+              print(f"process_bucket_cleanup_request all object delete done. Response : {response}")
+        
+          def download_url(url, save_path):
+            c = urllib3.PoolManager()
+            with c.request('GET',url, preload_content=False) as resp, open(save_path, 'wb') as out_file:
+                shutil.copyfileobj(resp, out_file)
+            resp.release_conn()
+            
+          def lambda_handler(event, context):
+            try:
+                print(f'Handling event : {event}')
+                request_type = event.get('RequestType')              
+                solution_url = event['ResourceProperties'].get('SolutionURL')
+                solution_bucket = event['ResourceProperties'].get('SolutionDestinationBucket')
+                response_data = {
+                    'RequestType': request_type,
+                    'SolutionURL' : solution_url,
+                    'SolutionDestinationBucket' : solution_bucket
+                }
+                if request_type == 'Create' or request_type == 'Update':
+                    if solution_url:
+                        print(f'downloading file from : {solution_url}')
+                        a = urlparse(solution_url)
+                        original_file_name = os.path.basename(a.path)
+                        temp_file_name = '/tmp/'+original_file_name
+                        download_url(solution_url,temp_file_name)
+                        file_size = (os.stat(temp_file_name).st_size / 1024)
+                        print(f'Downloaded report to File : {temp_file_name} , Size : {file_size}')
+                        s3_client = boto3.client('s3')
+                        print(f"uploading payload to : {solution_bucket} at {original_file_name}")
+                        extraArgsForUpload = {'ACL':'bucket-owner-full-control', 'Tagging':'Source=StackBinaryURL'}
+                        s3_client.upload_file(Filename=temp_file_name, Bucket=solution_bucket, Key=original_file_name,ExtraArgs=extraArgsForUpload)
+                elif request_type == 'Delete':
+                    solution_bucket = event['ResourceProperties'].get('S3BucketToCleanup')
+                    if solution_bucket:
+                        process_bucket_cleanup_request(solution_bucket)
+                send(event, context, 'SUCCESS', response_data, physical_resource_id)
+            except Exception as e:
+                send(event, context, 'FAILED', response_data, physical_resource_id)
+          def send(event, context, response_status, response_data, physical_resource_id, no_echo=False):
+            http = urllib3.PoolManager()
+            response_url = event['ResponseURL']
+            json_response_body = json.dumps({
+                'Status': response_status,
+                'Reason': f'See the details in CloudWatch Log Stream: {context.log_stream_name}',
+                'PhysicalResourceId': physical_resource_id,
+                'StackId': event['StackId'],
+                'RequestId': event['RequestId'],
+                'LogicalResourceId': event['LogicalResourceId'],
+                'NoEcho': no_echo,
+                'Data': response_data
+            }).encode('utf-8')
+            headers = {
+                'content-type': '',
+                'content-length': str(len(json_response_body))
+            }
+            try:
+                http.request('PUT', response_url,
+                             body=json_response_body, headers=headers)
+            except Exception as e:
+                print(e)
+      Description: Copy Solutions Binary to Local Cache Bucket
+      Handler: index.lambda_handler
+      Role : !GetAtt ReporterForAWSBackupRole.Arn
+      Runtime: python3.7
+      Timeout: 300
+
+  GlobalBackupJobStatusEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Join [ '', ['GlobalBackupJobStatusEventBus-', !Ref 'AWS::AccountId'] ]
+
+  GlobalAMReportERInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref ReporterForAWSBackupLambda
+      Principal: events.amazonaws.com
+      SourceArn: !Sub ${GlobalEventBridgeEventRule.Arn}    
+  
+  GlobalEventBridgeEventRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Send Audit Manager reports events to Lambda"
+      EventBusName: !Ref GlobalBackupJobStatusEventBus
+      State: "ENABLED"
+      EventPattern: 
+        source:
+          - 'backupauditmanager.events'
+          - 'observer.events'
+      Targets: 
+        - Arn: !GetAtt ReporterForAWSBackupLambda.Arn
+          Id: "GlobalEventBridgeEvent"
+  
+  GlobalBackupJobStatusEventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Properties: 
+      Action: 'events:PutEvents'
+      EventBusName: !Ref GlobalBackupJobStatusEventBus
+      Principal: '*'
+      StatementId: 'AllowEventsFromOtherRegionsAndAccounts'
+      
+  ReporterInitializationHandler:
+    Type: Custom::ReporterInitializationHandler
+    Properties:
+      ServiceToken: !GetAtt ReporterForAWSBackupLambda.Arn 
+      S3Bucket: !Ref LogsBucketName
+      ReportRecipient: !Ref ReportRecipient
+      RefreshGluePartitions: 'true'
+      CleanupGluePartitions: 'true'
+      S3PrefixList: aws-backup-logs/backup_job/,aws-backup-logs/restore_job/,aws-backup-logs/copy_job/,aws-backup-logs/config_job/latest/,aws-backup-logs/backup_job_report/,aws-backup-logs/restore_job_report/,aws-backup-logs/copy_job_report/,aws-backup-logs/resource_compliance_report/,aws-backup-logs/control_compliance_report/
+      S3EventHandlerLambdaArn: !GetAtt
+                                    - ReporterForAWSBackupLambda
+                                    - Arn    
+  ReporterForAWSBackupRole:
+    Type: 'AWS::IAM::Role'
+    Metadata:    
+      cfn_nag:
+        rules_to_suppress:
+          - id: F3
+          - id: W11
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service: 'quicksight.amazonaws.com'
+            Action:
+            - 'sts:AssumeRole'              
+      ManagedPolicyArns:
+          - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+          - PolicyName: invokeLambda
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+              - Effect: Allow
+                Action:
+                - lambda:InvokeFunction
+                Resource: '*'           
+          - PolicyName: s3Permissions
+            PolicyDocument:
+              Statement:
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:Encrypt                  
+                  - s3:PutObject*
+                  - s3:GetObject*
+                  - s3:DeleteObject
+                  - s3:*BucketNotification
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:ListMultipartUploadParts
+                  - s3:AbortMultipartUpload                  
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LogsBucketName}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LogsBucketName}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LocalCacheBucket}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LocalCacheBucket}'    
+          - PolicyName: logStreamPermissions
+            PolicyDocument:
+              Statement:                       
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:*'                        
+          - PolicyName: GlueAthenaPermissions
+            PolicyDocument:
+              Statement:
+              - Effect: Allow
+                Action:
+                  - athena:*
+                  - glue:*
+                Resource: '*'
+          - PolicyName: SESPermissions
+            PolicyDocument:
+              Statement:
+              - Effect: Allow
+                Action:
+                  - SES:SendRawEmail
+                  - SES:SendEmail
+                  - SES:VerifyEmailIdentity
+                  - SES:GetIdentityVerificationAttributes
+                Resource: '*'      
+  
+  GluePartitionAutoLoaderLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ReporterForAWSBackupLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !Sub arn:${AWS::Partition}:s3:::${LogsBucketName}
+  
+  ReporterForAWSBackupLambda:
+    Type: 'AWS::Lambda::Function'
+    Metadata:
+        cfn_nag:
+          rules_to_suppress:
+            - id: W89
+              reason: "Custom resource deployed in default VPC"
+            - id: W92
+              reason: "ReservedConcurrentExecutions not needed since this function runs stateless"    
+    DependsOn: CopySolutionToLocalCacheBucket
+    Properties:
+      Description: Function to manage AWS Backup events.
+      FunctionName: ReporterForAWSBackupLambda
+      Handler: lambda_handler.handler
+      Role: !GetAtt
+        - ReporterForAWSBackupRole
+        - Arn
+      Runtime: python3.7
+      MemorySize: 1024
+      Timeout: 900
+      Code:
+        S3Bucket: !Ref LocalCacheBucket
+        S3Key: 'bos-for-aws-backup.zip'
+      Environment:
+        Variables:
+          DailyJobReportSchedule: 'DailyJobReportSchedule'
+          S3BackupManagerLogBucket: !Ref LogsBucketName
+          S3BackupManagerLogKey: 'aws-backup-logs'
+          BackupManagerStackId: !Ref AWS::StackId
+          GlueDatabaseName: !Ref DBForAWSBackupLogs
+          GlueCacheBucket: !Ref LogsBucketName
+          GlueTableNameList: !Sub '${BackupJobLogsTable},${RestoreJobLogsTable},${CopyJobLogsTable},${AWSConfigLogsTable},${BackupReportsTable},${RestoreReportsTable},${CopyReportsTable},${ControlComplianceReportsTable},${ResourceComplianceReportsTable}'
+          GlueTablePartitionCacheKey: 'GlueCache'
+          S3AthenaOutputURI: !Sub 's3://${LogsBucketName}/aws-backup-logs/athena_results/'
+          SESEmailReportRecipientList: !Ref ReportRecipient 
+          S3EmailReportOutputBucket: !Ref LogsBucketName
+          S3EmailReportOutputKey: 'aws-backup-logs/email_results/'
+          QUERY_BACKUP_JOB_REPORT: SELECT * FROM aws_backup_logs_db.backup_job_report where year = '{UtcYear}' and month = '{UtcMonth}' and day = '{UtcDay}'
+          QUERY_RESTORE_JOB_REPORT: SELECT * FROM aws_backup_logs_db.restore_job_report where year = '{UtcYear}' and month = '{UtcMonth}' and day = '{UtcDay}'
+          QUERY_COPY_JOB_REPORT: SELECT * FROM aws_backup_logs_db.copy_job_report where year = '{UtcYear}' and month = '{UtcMonth}' and day = '{UtcDay}'
+          QUERY_DETAILED_BACKUP_REPORT: SELECT * FROM aws_backup_logs_db.aws_backup_logs_view where job_date = '{UtcToday}'
+  
+  DailyJobReportSchedule:
+    Type: "AWS::Events::Rule"
+    Properties:
+        Description: Daily Reporting Schedule
+        Name: DailyJobReportSchedule
+        ScheduleExpression: !Sub 'cron(${ReportGenerationMinute} ${ReportGenerationHour} * * ? *)'
+        State: ENABLED
+        Targets:
+          - Arn: !Sub ${ReporterForAWSBackupLambda.Arn}
+            Id: DailyJobReportSchedule
+  DailyJobReportSchedulePermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${ReporterForAWSBackupLambda.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${DailyJobReportSchedule.Arn}
+  DBForAWSBackupLogs:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Description: DBForAWSBackupLogs
+        Name: aws_backup_logs_db
+  AthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties: 
+      Name: !Sub "${AWS::StackName}-observer-for-aws-backup-wg"
+      RecursiveDeleteOption: true
+      State: ENABLED
+      WorkGroupConfiguration: 
+        ResultConfiguration: 
+          OutputLocation: !Sub 's3://${LogsBucketName}/aws-backup-logs/athena_results/'
+  BackupJobLogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: backup_job
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: job_date
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/backup_job/'
+          Columns:
+            - Name: job_id
+              Type: string
+            - Name: job_region
+              Type: string              
+            - Name: job_type
+              Type: string
+            - Name: backup_info
+              Type: string
+            - Name: resource_info
+              Type: string
+            - Name: restore_metadata
+              Type: string
+            - Name: tag_info
+              Type: string
+            - Name: backup_plan_info
+              Type: string
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true' }
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+  AWSBackupLogView:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref DBForAWSBackupLogs
+      CatalogId: !Ref AWS::AccountId
+      TableInput:
+        Name: aws_backup_logs_view
+        TableType: VIRTUAL_VIEW
+        Parameters:
+          presto_view: true
+        ViewOriginalText: 
+          Fn::Join:
+            - ''
+            - - '/* Presto View: '
+              - Fn::Base64: !Sub 
+                  - |
+                      {
+                      "originalSql": "SELECT json_extract_scalar(backup_info,'$.accountid') AS account_id, coalesce(json_extract_scalar(backup_plan_info, '$.backupplan.backupplanname'),'on-demand') AS backup_plan_name, coalesce(json_extract_scalar(backup_plan_info, '$.backupplanid'),'on-demand' ) AS backup_plan_id, coalesce(json_extract_scalar(FILTER(CAST(JSON_EXTRACT(backup_plan_info, '$.backupplan.rules') AS ARRAY(MAP(VARCHAR, JSON ))), x -> JSON_EXTRACT_SCALAR(x['ruleid'], '$')=JSON_EXTRACT_SCALAR(backup_info, '$.createdby.backupruleid'))[1]['rulename'],'$'),'on-demand') AS backup_rule_name, coalesce(json_extract_scalar(backup_info, '$.createdby.backupruleid'),'on-demand') AS backup_rule_id, job_type as job_type, coalesce(json_extract_scalar(backup_info, '$.resourcetype'),'not-applicable' ) AS resource_type, job_id , job_region , job_date , coalesce(json_extract_scalar(backup_info, '$.resourcearn'),'not-applicable' ) AS resource_arn, coalesce(json_extract_scalar(FILTER(CAST(JSON_EXTRACT(tag_info, '$.tags') AS ARRAY(MAP(VARCHAR, JSON ))), x -> JSON_EXTRACT_SCALAR(x['key'], '$')='Name')[1]['value'], '$') , regexp_extract(json_extract_scalar(backup_info, '$.resourcearn'), '[^ :]+$')) AS resource_name, coalesce(json_extract_scalar(backup_info, '$.recoverypointarn'),'not-applicable' ) AS recoverypoint_arn, coalesce(json_extract_scalar(backup_info, '$.state'),'not-applicable' ) AS job_state, coalesce(json_extract_scalar(backup_info, '$.statusmessage'),'not-applicable' ) AS status_message, coalesce(json_extract_scalar(backup_info, '$.startby'),'not-applicable' ) AS startby_date, json_extract_scalar(backup_info, '$.creationdate')  AS creation_date,json_extract_scalar(backup_info, '$.completiondate')  AS completion_date, (CASE WHEN (cast(json_extract(backup_info, '$.backupsizeinbytes') AS varchar) = '0') THEN '0' ELSE CAST((((CAST(json_extract(backup_info, '$.backupsizeinbytes') AS bigint) / 1024) / 1024) / 1024) AS varchar) END) as backup_size_in_gb, coalesce(json_extract_scalar(backup_info, '$.backupvaultname'),'NA' ) AS backupvault_name,cast(date_diff('minute', date_parse(substring(json_extract_scalar(backup_info, '$.creationdate'),1,19),'%Y-%m-%d %H:%i:%s'),date_parse(substring(json_extract_scalar(backup_info, '$.completiondate'),1,19),'%Y-%m-%d %H:%i:%s')) AS varchar) as duration_in_minutes FROM ${DatabaseName}.${TableName} ORDER BY creation_date",
+                      "catalog": "awsdatacatalog",
+                      "schema": "${DatabaseName}",
+                      "columns": [
+                        {
+                          "name": "account_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_plan_name",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_plan_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_rule_name",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_rule_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_region",
+                          "type": "varchar"
+                        },                        
+                        {
+                          "name": "job_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_name",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "recoverypoint_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_state",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "status_message",
+                          "type": "varchar"
+                        },                        
+                        {
+                          "name": "startby_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "creation_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "completion_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_size_in_gb",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backupvault_name",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "duration_in_minutes",
+                          "type": "varchar"
+                        }
+                      ]
+                      }
+                  - { 
+                      DatabaseName: !Ref DBForAWSBackupLogs,
+                      TableName: !Ref BackupJobLogsTable
+                    }
+              - ' */'
+        ViewExpandedText: '/* Presto View */'
+        StorageDescriptor:
+          SerdeInfo: {}
+          Columns:
+          - {Name: job_id, Type: string}
+          - {Name: job_region, Type: string}
+          - {Name: job_date, Type: string}
+          - {Name: job_state, Type: string}          
+          - {Name: job_type, Type: string}
+          - {Name: status_message, Type: string}
+          - {Name: account_id, Type: string}
+          - {Name: backup_plan_name, Type: string}
+          - {Name: backup_plan_id, Type: string}
+          - {Name: backup_rule_name, Type: string}
+          - {Name: backup_rule_id, Type: string}
+          - {Name: resource_type, Type: string}
+          - {Name: resource_arn, Type: string}
+          - {Name: resource_name, Type: string}
+          - {Name: recoverypoint_arn, Type: string}
+          - {Name: startby_date, Type: string}
+          - {Name: creation_date, Type: string}
+          - {Name: completion_date, Type: string}
+          - {Name: duration_in_minutes, Type: string}
+          - {Name: backup_size_in_gb, Type: string}
+          - {Name: backupvault_name, Type: string}                                           
+  RestoreJobLogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: restore_job
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: job_date
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/restore_job/'
+          Columns:
+            - Name: job_id
+              Type: string
+            - Name: job_region
+              Type: string
+            - Name: job_type
+              Type: string
+            - Name: restore_info
+              Type: string
+            - Name: recovery_info
+              Type: string
+            - Name: tag_info
+              Type: string
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true' }
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe 
+  AWSRestoreLogView:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref DBForAWSBackupLogs
+      CatalogId: !Ref AWS::AccountId
+      TableInput:
+        Name: aws_restore_logs_view
+        TableType: VIRTUAL_VIEW
+        Parameters:
+          presto_view: true
+        ViewOriginalText: 
+          Fn::Join:
+            - ''
+            - - '/* Presto View: '
+              - Fn::Base64: !Sub 
+                  - |
+                      {
+                      "originalSql": "SELECT job_type,job_id,job_region,job_date,coalesce(json_extract_scalar(restore_info, '$.status'),'not-applicable' ) AS job_state,coalesce(json_extract_scalar(restore_info, '$.statusmessage'),'not-applicable' ) AS status_message,json_extract_scalar(restore_info,'$.accountid') AS account_id,coalesce(json_extract_scalar(recovery_info, '$.resourcetype'),'not-applicable' ) AS resource_type,coalesce(json_extract_scalar(recovery_info, '$.resourcearn'),'not-applicable' ) AS resource_arn,coalesce(json_extract_scalar(recovery_info, '$.recoverypointarn'),'not-applicable' ) AS recoverypoint_arn,coalesce(json_extract_scalar(recovery_info, '$.backupvaultname'),'not-applicable' ) AS backupvault_name,coalesce(json_extract_scalar(recovery_info, '$.lastrestoretime'),'not-applicable' ) AS last_restore_time, cast((CASE WHEN (cast(json_extract(restore_info, '$.backupsizeinbytes') AS varchar) = '0') THEN '0' ELSE CAST((((CAST(json_extract(restore_info, '$.backupsizeinbytes') AS bigint) / 1024) / 1024) / 1024) AS VARCHAR) END)  as VARCHAR) as backup_size_in_gb, coalesce(json_extract_scalar(restore_info, '$.creationdate'),'not-applicable' ) AS creation_date,coalesce(json_extract_scalar(restore_info, '$.completiondate'),'not-applicable' ) AS completion_date, cast(date_diff('minute', date_parse(substring(json_extract_scalar(restore_info, '$.creationdate'),1,19),'%Y-%m-%d %H:%i:%s'), date_parse(substring(json_extract_scalar(restore_info, '$.completiondate'),1,19),'%Y-%m-%d %H:%i:%s')) AS VARCHAR) as duration_in_minutes,tag_info  FROM ${DatabaseName}.${TableName} ORDER BY creation_date",
+                      "catalog": "awsdatacatalog",
+                      "schema": "${DatabaseName}",
+                      "columns": [
+                        {
+                          "name": "job_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_region",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_state",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "status_message",
+                          "type": "varchar"
+                        },                        
+                        {
+                          "name": "account_id",
+                          "type": "varchar"
+                        },                      
+                        {
+                          "name": "resource_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "recoverypoint_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backupvault_name",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "last_restore_time",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_size_in_gb",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "creation_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "completion_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "duration_in_minutes",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "tag_info",
+                          "type": "varchar"
+                        }
+                      ]
+                      }
+                  - { 
+                      DatabaseName: !Ref DBForAWSBackupLogs,
+                      TableName: !Ref RestoreJobLogsTable
+                    }
+              - ' */'
+        ViewExpandedText: '/* Presto View */'
+        StorageDescriptor:
+          SerdeInfo: {}
+          Columns:
+          - {Name: job_type, Type: string}
+          - {Name: job_id, Type: string}
+          - {Name: job_region, Type: string}
+          - {Name: job_date, Type: string}
+          - {Name: job_state, Type: string}
+          - {Name: status_message, Type: string}          
+          - {Name: account_id, Type: string}          
+          - {Name: resource_type, Type: string}
+          - {Name: resource_arn, Type: string}
+          - {Name: recoverypoint_arn, Type: string}
+          - {Name: backupvault_name, Type: string}
+          - {Name: last_restore_time, Type: string}
+          - {Name: backup_size_in_gb, Type: string}
+          - {Name: creation_date, Type: string}
+          - {Name: completion_date, Type: string}
+          - {Name: duration_in_minutes, Type: string}
+          - {Name: tag_info, Type: string}
+  CopyJobLogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: copy_job
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: job_date
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/copy_job/'
+          Columns:
+            - Name: job_id
+              Type: string
+            - Name: job_region
+              Type: string
+            - Name: job_type
+              Type: string
+            - Name: copy_info
+              Type: string
+            - Name: additional_info
+              Type: string
+            - Name: tag_info
+              Type: string
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true' }
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe             
+                                          
+                                          
+  AWSCopyLogView:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: !Ref DBForAWSBackupLogs
+      CatalogId: !Ref AWS::AccountId
+      TableInput:
+        Name: aws_copy_logs_view
+        TableType: VIRTUAL_VIEW
+        Parameters:
+          presto_view: true
+        ViewOriginalText: 
+          Fn::Join:
+            - ''
+            - - '/* Presto View: '
+              - Fn::Base64: !Sub 
+                  - |
+                      {
+                      "originalSql": "SELECT  job_type,job_id,job_region,job_date,coalesce(json_extract_scalar(copy_info, '$.copyjob.state'),'not-applicable' ) AS job_state,coalesce(json_extract_scalar(copy_info, '$.copyjob.statusmessage'),'not-applicable' ) AS status_message,json_extract_scalar(copy_info,'$.copyjob.accountid') AS account_id, coalesce(json_extract_scalar(copy_info, '$.copyjob.resourcetype'),'not-applicable' ) AS resource_type,coalesce(json_extract_scalar(copy_info, '$.copyjob.resourcearn'),'not-applicable' ) AS resource_arn,coalesce(json_extract_scalar(copy_info, '$.copyjob.sourcerecoverypointarn'),'NA' ) AS source_recoverypoint_arn,coalesce(json_extract_scalar(copy_info, '$.copyjob.destinationrecoverypointarn'),'NA' ) AS destination_recoverypoint_arn,coalesce(json_extract_scalar(copy_info, '$.copyjob.sourcebackupvaultarn'),'NA' ) AS source_backupvault_arn,coalesce(json_extract_scalar(copy_info, '$.copyjob.destinationbackupvaultarn'),'NA' ) AS destination_backupvault_arn, cast( (CASE WHEN (cast(json_extract(copy_info, '$.copyjob.backupsizeinbytes') AS varchar) = '0') THEN '0' ELSE CAST((((CAST(json_extract(copy_info, '$.copyjob.backupsizeinbytes') AS bigint) / 1024) / 1024) / 1024) AS varchar) END) as varchar) as backup_size_in_gb ,coalesce(json_extract_scalar(copy_info, '$.copyjob.creationdate'),'not-applicable' ) AS creation_date, coalesce(json_extract_scalar(copy_info, '$.copyjob.completiondate'),'not-applicable' ) AS completion_date, cast(date_diff('minute', date_parse(substring(json_extract_scalar(copy_info, '$.copyjob.creationdate'),1,19),'%Y-%m-%d %H:%i:%s'), date_parse(substring(json_extract_scalar(copy_info, '$.copyjob.completiondate'),1,19),'%Y-%m-%d %H:%i:%s')) AS varchar) as duration_in_minutes, additional_info, tag_info FROM ${DatabaseName}.${TableName} ORDER BY creation_date",
+                      "catalog": "awsdatacatalog",
+                      "schema": "${DatabaseName}",
+                      "columns": [
+                        {
+                          "name": "job_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_region",
+                          "type": "varchar"
+                        },                        
+                        {
+                          "name": "job_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "job_state",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "status_message",
+                          "type": "varchar"
+                        },                        
+                        {
+                          "name": "account_id",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_type",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "resource_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "source_recoverypoint_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "destination_recoverypoint_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "source_backupvault_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "destination_backupvault_arn",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "backup_size_in_gb",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "creation_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "completion_date",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "duration_in_minutes",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "additional_info",
+                          "type": "varchar"
+                        },
+                        {
+                          "name": "tag_info",
+                          "type": "varchar"
+                        }
+                        
+                      ]
+                      }
+                  - { 
+                      DatabaseName: !Ref DBForAWSBackupLogs,
+                      TableName: !Ref CopyJobLogsTable
+                    }
+              - ' */'
+        ViewExpandedText: '/* Presto View */'
+        StorageDescriptor:
+          SerdeInfo: {}
+          Columns:
+          - {Name: job_type, Type: string}
+          - {Name: job_id, Type: string}
+          - {Name: job_region, Type: string}
+          - {Name: job_date, Type: string}
+          - {Name: job_state, Type: string}          
+          - {Name: status_message, Type: string}               
+          - {Name: account_id, Type: string}
+          - {Name: resource_type, Type: string}
+          - {Name: resource_arn, Type: string}
+          - {Name: source_recoverypoint_arn, Type: string}
+          - {Name: destination_recoverypoint_arn, Type: string}
+          - {Name: source_backupvault_arn, Type: string}
+          - {Name: destination_backupvault_arn, Type: string}
+          - {Name: backup_size_in_gb, Type: string}          
+          - {Name: creation_date, Type: string}
+          - {Name: completion_date, Type: string}
+          - {Name: duration_in_minutes, Type: string}
+          - {Name: additional_info, Type: string}
+          - {Name: tag_info, Type: string}          
+          
+  AWSConfigLogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: aws_config
+        TableType: EXTERNAL_TABLE
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/config_job/latest/'
+          Columns:
+            - Name: accountId
+              Type: string
+            - Name: resourceId
+              Type: string
+            - Name: awsRegion
+              Type: string
+            - Name: resourceName
+              Type: string
+            - Name: configurationItemCaptureTime
+              Type: string
+            - Name: resourceCreationTime
+              Type: string 
+            - Name: resourceType
+              Type: string 
+            - Name: arn
+              Type: string               
+            - Name: tags
+              Type: string                
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true' }
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            
+  BackupReportsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: backup_job_report
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: account_partition_id
+              Type: string
+            - Name: region_partition_id
+              Type: string
+            - Name: year
+              Type: string
+            - Name: month
+              Type: string
+            - Name: day
+              Type: string     
+            - Name: report_name
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/backup_job_report/csv/'
+          Columns:
+            - Name: report_period_start
+              Type: string
+            - Name: report_period_end
+              Type: string
+            - Name: account_id
+              Type: string
+            - Name: region
+              Type: string          
+            - Name: backup_job_id
+              Type: string
+            - Name: job_status
+              Type: string
+            - Name: status_message
+              Type: string              
+            - Name: resource_type
+              Type: string
+            - Name: resource_arn
+              Type: string
+            - Name: backup_plan_arn
+              Type: string
+            - Name: backup_rule_id
+              Type: string
+            - Name: creation_date
+              Type: string
+            - Name: completion_date
+              Type: string
+            - Name: expected_completion_date
+              Type: string     
+            - Name: recoverypoint_arn
+              Type: string
+            - Name: job_run_time
+              Type: string
+            - Name: backup_size_in_bytes
+              Type: string
+            - Name: backup_vault_name
+              Type: string              
+            - Name: backup_vault_arn
+              Type: string              
+            - Name: iam_role_arn
+              Type: string              
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true', field.delim: ',' , 'skip.header.line.count': '1'}
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe  
+
+  RestoreReportsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: restore_job_report
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: account_partition_id
+              Type: string
+            - Name: region_partition_id
+              Type: string
+            - Name: year
+              Type: string
+            - Name: month
+              Type: string
+            - Name: day
+              Type: string      
+            - Name: report_name
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/restore_job_report/csv/'
+          Columns:
+            - Name: report_period_start
+              Type: string
+            - Name: report_period_end
+              Type: string
+            - Name: account_id
+              Type: string
+            - Name: region
+              Type: string          
+            - Name: restore_job_id
+              Type: string
+            - Name: job_status
+              Type: string
+            - Name: status_message
+              Type: string
+            - Name: resource_type
+              Type: string
+            - Name: recoverypoint_arn
+              Type: string      
+            - Name: created_resource_arn
+              Type: string      
+            - Name: creation_date
+              Type: string      
+            - Name: completion_date
+              Type: string   
+            - Name: expected_completion_time_in_mins
+              Type: string   
+            - Name: job_run_time
+              Type: string      
+            - Name: backup_size_in_bytes
+              Type: string 
+            - Name: percentage_done
+              Type: string      
+            - Name: iam_role_arn
+              Type: string  
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true', field.delim: ',' , 'skip.header.line.count': '1'}
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe   
+  
+  CopyReportsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: copy_job_report
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: account_partition_id
+              Type: string
+            - Name: region_partition_id
+              Type: string
+            - Name: year
+              Type: string
+            - Name: month
+              Type: string
+            - Name: day
+              Type: string
+            - Name: report_name
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/copy_job_report/csv/'
+          Columns:
+            - Name: report_period_start
+              Type: string
+            - Name: report_period_end
+              Type: string
+            - Name: account_id
+              Type: string
+            - Name: region
+              Type: string          
+            - Name: copy_job_id
+              Type: string
+            - Name: job_status
+              Type: string
+            - Name: status_message
+              Type: string
+            - Name: resource_type
+              Type: string
+            - Name: resource_arn
+              Type: string      
+            - Name: backup_plan_arn
+              Type: string      
+            - Name: backup_rule_id
+              Type: string      
+            - Name: creation_date
+              Type: string      
+            - Name: completion_date
+              Type: string      
+            - Name: expected_completion_date
+              Type: string      
+            - Name: job_run_time
+              Type: string      
+            - Name: backup_size_in_bytes
+              Type: string      
+            - Name: source_recoverypoint_arn
+              Type: string      
+            - Name: source_backupvault_arn
+              Type: string      
+            - Name: destination_recoverypoint_arn
+              Type: string      
+            - Name: destination_backupvault_arn
+              Type: string  
+            - Name: iam_role_arn
+              Type: string  
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { case.insensitive: 'true', field.delim: ',' , 'skip.header.line.count': '1'}
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe   
+            
+  ControlComplianceReportsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: control_compliance_report
+        Parameters: { case.insensitive: 'true', 'skip.header.line.count': '1'}
+        TableType: EXTERNAL_TABLE
+        PartitionKeys: 
+            - Name: account_partition_id
+              Type: string
+            - Name: region_partition_id
+              Type: string
+            - Name: year
+              Type: string
+            - Name: month
+              Type: string
+            - Name: day
+              Type: string              
+            - Name: report_name
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/control_compliance_report/csv/'
+          Columns:
+            - Name: account_id
+              Type: string
+            - Name: region
+              Type: string          
+            - Name: framework_name
+              Type: string
+            - Name: framework_description
+              Type: string              
+            - Name: control_name
+              Type: string              
+            - Name: control_compliance_status
+              Type: string              
+            - Name: last_evaluation_time
+              Type: string     
+            - Name: compliant_resource_count
+              Type: string              
+            - Name: non_compliant_resource_count
+              Type: string              
+            - Name: control_frequency
+              Type: string    
+            - Name: control_scope
+              Type: string    
+            - Name: control_parameters
+              Type: string    
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { "separatorChar" : ",", "quoteChar" : "`", "escapeChar" : "\\" }
+            SerializationLibrary: org.apache.hadoop.hive.serde2.OpenCSVSerde           
+
+  ResourceComplianceReportsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DBForAWSBackupLogs
+      TableInput:
+        Name: resource_compliance_report
+        TableType: EXTERNAL_TABLE
+        Parameters: { case.insensitive: 'true', 'skip.header.line.count': '1'}
+        PartitionKeys: 
+            - Name: account_partition_id
+              Type: string
+            - Name: region_partition_id
+              Type: string
+            - Name: year
+              Type: string
+            - Name: month
+              Type: string
+            - Name: day
+              Type: string
+            - Name: report_name
+              Type: string
+        StorageDescriptor:
+          Location: !Sub 's3://${LogsBucketName}/aws-backup-logs/resource_compliance_report/csv/'
+          Columns:
+            - Name: account_id
+              Type: string
+            - Name: region
+              Type: string          
+            - Name: framework_name
+              Type: string
+            - Name: framework_description
+              Type: string
+            - Name: control_name
+              Type: string
+            - Name: resource_id
+              Type: string
+            - Name: resource_type
+              Type: string       
+            - Name: resource_compliance_status
+              Type: string
+            - Name: last_evaluation_time
+              Type: string
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Parameters: { "separatorChar" : ",", "quoteChar" : "`", "escapeChar" : "\\" }
+            SerializationLibrary: org.apache.hadoop.hive.serde2.OpenCSVSerde               
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName

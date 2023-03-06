@@ -1,0 +1,1293 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'QuickSight Dashboard related to Backup Observer Solution For AWS Backup'
+Parameters:
+  QuickSightIdentityRegion:
+    Type: String
+    MinLength: 1
+    Description: Region where QuickSight identity is configured.
+
+  QuickSightUser:
+    Type: String
+    MinLength: 1
+    Description: User name of QuickSight author/admin from default namespace.
+Resources:
+  ObserverQSDataSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      Name: 'BoS-For-AWSBackup-DataSource'
+      DataSourceId: !Join
+                    - "-"
+                    - - "BoS-For-AWSBackup-DataSource"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"
+      AwsAccountId: !Ref AWS::AccountId
+      Type: ATHENA
+      DataSourceParameters:
+        AthenaParameters:
+          WorkGroup: 'primary'      
+      Permissions:
+        - Principal: !Join
+            - ''
+            - - !Sub 'arn:${AWS::Partition}:quicksight:'
+              - !Ref QuickSightIdentityRegion
+              - ':'
+              - !Ref AWS::AccountId
+              - ':user/default/'
+              - !Ref QuickSightUser
+          Actions:
+            - quicksight:UpdateDataSourcePermissions
+            - quicksight:DescribeDataSource
+            - quicksight:DescribeDataSourcePermissions
+            - quicksight:PassDataSource
+            - quicksight:UpdateDataSource
+            - quicksight:DeleteDataSource
+
+  BackupJobDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'BackupJobDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "BackupJobDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"      
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          BackupJobPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: account_id
+                    Type: STRING        
+                  - Name: backup_plan_name
+                    Type: STRING        
+                  - Name: backup_plan_id
+                    Type: STRING        
+                  - Name: backup_rule_name
+                    Type: STRING        
+                  - Name: backup_rule_id
+                    Type: STRING        
+                  - Name: job_type
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: job_id
+                    Type: STRING        
+                  - Name: job_region
+                    Type: STRING        
+                  - Name: job_date
+                    Type: STRING        
+                  - Name: resource_arn
+                    Type: STRING        
+                  - Name: resource_name
+                    Type: STRING        
+                  - Name: recoverypoint_arn
+                    Type: STRING        
+                  - Name: job_state
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING   
+                  - Name: startby_date
+                    Type: STRING   
+                  - Name: creation_date
+                    Type: STRING   
+                  - Name: completion_date
+                    Type: STRING   
+                  - Name: backup_size_in_gb
+                    Type: STRING   
+                  - Name: backupvault_name
+                    Type: STRING   
+                  - Name: duration_in_minutes
+                    Type: STRING                 
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'aws_backup_logs_view_full' 
+              SqlQuery: 'select * from aws_backup_logs_db.aws_backup_logs_view'
+      LogicalTableMap:
+          BackupJobLogicalTable:
+            Alias: BackupJobDS
+            DataTransforms:
+            - CastColumnTypeOperation:
+                ColumnName: job_date
+                NewColumnType: DATETIME            
+                Format: 'yyyy-MM-dd'
+            - CastColumnTypeOperation:
+                ColumnName: backup_size_in_gb
+                NewColumnType: DECIMAL
+            - CastColumnTypeOperation:
+                ColumnName: duration_in_minutes
+                NewColumnType: INTEGER
+            - ProjectOperation:
+                ProjectedColumns:
+                - account_id
+                - backup_plan_name
+                - backup_plan_id
+                - backup_rule_name
+                - backup_rule_id
+                - job_type
+                - resource_type
+                - job_id
+                - job_region
+                - job_date
+                - resource_arn
+                - resource_name
+                - recoverypoint_arn
+                - job_state
+                - status_message
+                - startby_date
+                - creation_date
+                - completion_date
+                - backup_size_in_gb
+                - backupvault_name
+                - duration_in_minutes   
+            Source:
+              PhysicalTableId: BackupJobPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY
+      
+  RestoreJobDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'RestoreJobDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "RestoreJobDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          RestoreJobPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: job_type
+                    Type: STRING        
+                  - Name: job_id
+                    Type: STRING        
+                  - Name: job_region
+                    Type: STRING        
+                  - Name: job_date
+                    Type: STRING        
+                  - Name: job_state
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING        
+                  - Name: account_id
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: resource_arn
+                    Type: STRING        
+                  - Name: recoverypoint_arn
+                    Type: STRING        
+                  - Name: backupvault_name
+                    Type: STRING        
+                  - Name: last_restore_time
+                    Type: STRING        
+                  - Name: backup_size_in_gb
+                    Type: STRING        
+                  - Name: creation_date
+                    Type: STRING        
+                  - Name: completion_date
+                    Type: STRING        
+                  - Name: duration_in_minutes
+                    Type: STRING        
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'aws_restore_logs_view_full' 
+              SqlQuery: 'select * from aws_backup_logs_db.aws_restore_logs_view'
+      LogicalTableMap:
+          RestoreJobLogicalTable:
+            Alias: RestoreJobDS
+            DataTransforms:
+            - CastColumnTypeOperation:
+                ColumnName: job_date
+                NewColumnType: DATETIME            
+                Format: 'yyyy-MM-dd'            
+            - CastColumnTypeOperation:
+                ColumnName: backup_size_in_gb
+                NewColumnType: DECIMAL
+            - CastColumnTypeOperation:
+                ColumnName: duration_in_minutes
+                NewColumnType: INTEGER
+            - ProjectOperation:
+                ProjectedColumns:
+                - job_type
+                - job_id
+                - job_region
+                - job_date
+                - job_state
+                - status_message
+                - account_id
+                - resource_type
+                - resource_arn
+                - recoverypoint_arn
+                - backupvault_name
+                - last_restore_time
+                - backup_size_in_gb
+                - creation_date
+                - completion_date
+                - duration_in_minutes
+            Source:
+              PhysicalTableId: RestoreJobPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY  
+
+  CopyJobDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'CopyJobDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "CopyJobDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          CopyJobPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: job_type
+                    Type: STRING        
+                  - Name: job_id
+                    Type: STRING        
+                  - Name: job_region
+                    Type: STRING        
+                  - Name: job_date
+                    Type: STRING        
+                  - Name: job_state
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING        
+                  - Name: account_id
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: resource_arn
+                    Type: STRING   
+                  - Name: source_recoverypoint_arn
+                    Type: STRING        
+                  - Name: destination_recoverypoint_arn
+                    Type: STRING        
+                  - Name: source_backupvault_arn
+                    Type: STRING        
+                  - Name: destination_backupvault_arn
+                    Type: STRING        
+                  - Name: backup_size_in_gb
+                    Type: STRING        
+                  - Name: creation_date
+                    Type: STRING        
+                  - Name: completion_date
+                    Type: STRING        
+                  - Name: duration_in_minutes
+                    Type: STRING        
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'aws_copy_logs_view_full' 
+              SqlQuery: 'select * from aws_backup_logs_db.aws_copy_logs_view'
+      LogicalTableMap:
+          CopyJobLogicalTable:
+            Alias: CopyJobDS
+            DataTransforms:
+            - CastColumnTypeOperation:
+                ColumnName: job_date
+                NewColumnType: DATETIME            
+                Format: 'yyyy-MM-dd'            
+            - CastColumnTypeOperation:
+                ColumnName: backup_size_in_gb
+                NewColumnType: DECIMAL
+            - CastColumnTypeOperation:
+                ColumnName: duration_in_minutes
+                NewColumnType: INTEGER
+            - ProjectOperation:
+                ProjectedColumns:
+                - job_type
+                - job_id
+                - job_region
+                - job_date
+                - job_state
+                - status_message
+                - account_id
+                - resource_type
+                - resource_arn
+                - source_recoverypoint_arn
+                - destination_recoverypoint_arn
+                - source_backupvault_arn
+                - destination_backupvault_arn
+                - backup_size_in_gb
+                - creation_date
+                - completion_date
+                - duration_in_minutes 
+            Source:
+              PhysicalTableId: CopyJobPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY     
+
+  ConfigDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'ConfigDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "ConfigDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          ConfigPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: accountid
+                    Type: STRING        
+                  - Name: resourceid
+                    Type: STRING        
+                  - Name: awsregion
+                    Type: STRING        
+                  - Name: resourcename
+                    Type: STRING        
+                  - Name: configurationitemcapturetime
+                    Type: STRING        
+                  - Name: resourcecreationtime
+                    Type: STRING        
+                  - Name: resourcetype
+                    Type: STRING        
+                  - Name: arn
+                    Type: STRING        
+                  - Name: tags
+                    Type: STRING   
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'aws_config' 
+              SqlQuery: 'select * from aws_backup_logs_db.aws_config'
+      LogicalTableMap:
+          ConfigLogicalTable:
+            Alias: ConfigDS
+            DataTransforms:
+            - ProjectOperation:
+                ProjectedColumns:
+                - accountid
+                - resourceid
+                - awsregion
+                - resourcename
+                - configurationitemcapturetime
+                - resourcecreationtime
+                - resourcetype
+                - arn
+                - tags
+            Source:
+              PhysicalTableId: ConfigPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY        
+
+  BackupJobReportDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'BackupJobReportDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "BackupJobReportDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          BackupJobReportPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: report_period_start
+                    Type: STRING        
+                  - Name: report_period_end
+                    Type: STRING        
+                  - Name: backup_job_id
+                    Type: STRING        
+                  - Name: job_status
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: resource_arn
+                    Type: STRING   
+                  - Name: backup_plan_arn
+                    Type: STRING        
+                  - Name: backup_rule_id
+                    Type: STRING        
+                  - Name: creation_date
+                    Type: STRING        
+                  - Name: completion_date
+                    Type: STRING        
+                  - Name: expected_completion_date
+                    Type: STRING        
+                  - Name: recoverypoint_arn
+                    Type: STRING        
+                  - Name: job_run_time
+                    Type: STRING        
+                  - Name: backup_size_in_bytes
+                    Type: STRING       
+                  - Name: backup_vault_name
+                    Type: STRING       
+                  - Name: backup_vault_arn
+                    Type: STRING       
+                  - Name: iam_role_arn
+                    Type: STRING       
+                  - Name: region_partition_id
+                    Type: STRING       
+                  - Name: account_partition_id
+                    Type: STRING  
+                  - Name: year
+                    Type: STRING  
+                  - Name: month
+                    Type: STRING  
+                  - Name: day
+                    Type: STRING  
+                  - Name: report_name
+                    Type: STRING                      
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'backup_job_report' 
+              SqlQuery: 'select * from aws_backup_logs_db.backup_job_report'
+      LogicalTableMap:
+          BackupJobReportLogicalTable:
+            Alias: BackupJobReportDS
+            DataTransforms:
+            - CreateColumnsOperation: 
+                Columns:
+                  - ColumnName: trimReportStartDate
+                    ColumnId: trimReportStartDate-BackupJobReportDS
+                    Expression: 'substring({report_period_start},2,10)'
+                  - ColumnName: trimReportEndDate
+                    ColumnId: trimReportEndDate-BackupJobReportDS
+                    Expression: 'substring({report_period_end},2,10)'            
+            - ProjectOperation:
+                ProjectedColumns:
+                - report_period_start
+                - report_period_end
+                - backup_job_id
+                - job_status
+                - status_message
+                - resource_type
+                - resource_arn
+                - backup_plan_arn
+                - backup_rule_id
+                - creation_date
+                - completion_date
+                - expected_completion_date
+                - recoverypoint_arn
+                - job_run_time
+                - backup_size_in_bytes 
+                - backup_vault_name 
+                - backup_vault_arn 
+                - iam_role_arn
+                - region_partition_id
+                - account_partition_id                
+                - year
+                - month
+                - day
+                - report_name
+                - trimReportStartDate
+                - trimReportEndDate
+            Source:
+              PhysicalTableId: BackupJobReportPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY  
+      
+  RestoreJobReportDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'RestoreJobReportDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "RestoreJobReportDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          RestoreJobReportPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: report_period_start
+                    Type: STRING        
+                  - Name: report_period_end
+                    Type: STRING        
+                  - Name: restore_job_id
+                    Type: STRING        
+                  - Name: job_status
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: recoverypoint_arn
+                    Type: STRING   
+                  - Name: created_resource_arn
+                    Type: STRING       
+                  - Name: creation_date
+                    Type: STRING                       
+                  - Name: completion_date
+                    Type: STRING        
+                  - Name: expected_completion_time_in_mins
+                    Type: STRING
+                  - Name: job_run_time
+                    Type: STRING        
+                  - Name: backup_size_in_bytes
+                    Type: STRING       
+                  - Name: percentage_done
+                    Type: STRING       
+                  - Name: iam_role_arn
+                    Type: STRING       
+                  - Name: region_partition_id
+                    Type: STRING       
+                  - Name: account_partition_id
+                    Type: STRING  
+                  - Name: year
+                    Type: STRING  
+                  - Name: month
+                    Type: STRING  
+                  - Name: day
+                    Type: STRING  
+                  - Name: report_name
+                    Type: STRING      
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'restore_job_report' 
+              SqlQuery: 'select * from aws_backup_logs_db.restore_job_report'
+      LogicalTableMap:
+          RestoreJobReportLogicalTable:
+            Alias: RestoreJobReportDS
+            DataTransforms:
+            - CreateColumnsOperation: 
+                Columns:
+                  - ColumnName: trimReportStartDate
+                    ColumnId: trimReportStartDate-RestoreJobReportDS
+                    Expression: 'substring({report_period_start},2,10)'
+                  - ColumnName: trimReportEndDate
+                    ColumnId: trimReportEndDate-RestoreJobReportDS
+                    Expression: 'substring({report_period_end},2,10)'   
+            - ProjectOperation:
+                ProjectedColumns:
+                - report_period_start
+                - report_period_end
+                - restore_job_id
+                - job_status
+                - status_message
+                - resource_type
+                - recoverypoint_arn
+                - created_resource_arn
+                - creation_date
+                - completion_date
+                - expected_completion_time_in_mins
+                - job_run_time
+                - backup_size_in_bytes
+                - percentage_done
+                - iam_role_arn
+                - region_partition_id
+                - account_partition_id                
+                - year
+                - month
+                - day
+                - report_name
+                - trimReportStartDate
+                - trimReportEndDate                
+            Source:
+              PhysicalTableId: RestoreJobReportPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY  
+      
+  CopyJobReportDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'CopyJobReportDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "CopyJobReportDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          CopyJobReportPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: report_period_start
+                    Type: STRING        
+                  - Name: report_period_end
+                    Type: STRING        
+                  - Name: copy_job_id
+                    Type: STRING        
+                  - Name: job_status
+                    Type: STRING        
+                  - Name: status_message
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: resource_arn
+                    Type: STRING
+                  - Name: backup_plan_arn
+                    Type: STRING                  
+                  - Name: backup_rule_id
+                    Type: STRING       
+                  - Name: creation_date
+                    Type: STRING                       
+                  - Name: completion_date
+                    Type: STRING        
+                  - Name: expected_completion_date
+                    Type: STRING
+                  - Name: job_run_time
+                    Type: STRING        
+                  - Name: backup_size_in_bytes
+                    Type: STRING       
+                  - Name: source_recoverypoint_arn
+                    Type: STRING                  
+                  - Name: source_backupvault_arn
+                    Type: STRING                  
+                  - Name: destination_recoverypoint_arn
+                    Type: STRING                  
+                  - Name: destination_backupvault_arn                      
+                    Type: STRING                  
+                  - Name: iam_role_arn
+                    Type: STRING       
+                  - Name: region_partition_id
+                    Type: STRING       
+                  - Name: account_partition_id
+                    Type: STRING  
+                  - Name: year
+                    Type: STRING  
+                  - Name: month
+                    Type: STRING  
+                  - Name: day
+                    Type: STRING  
+                  - Name: report_name
+                    Type: STRING      
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'copy_job_report' 
+              SqlQuery: 'select * from aws_backup_logs_db.copy_job_report'
+      LogicalTableMap:
+          CopyJobReportLogicalTable:
+            Alias: CopyJobReportDS
+            DataTransforms:
+            - CreateColumnsOperation: 
+                Columns:
+                  - ColumnName: trimReportStartDate
+                    ColumnId: trimReportStartDate-CopyJobReportDS
+                    Expression: 'substring({report_period_start},2,10)'
+                  - ColumnName: trimReportEndDate
+                    ColumnId: trimReportEndDate-CopyJobReportDS
+                    Expression: 'substring({report_period_end},2,10)'   
+            - ProjectOperation:
+                ProjectedColumns:
+                - report_period_start
+                - report_period_end
+                - copy_job_id
+                - job_status
+                - status_message
+                - resource_type
+                - resource_arn
+                - backup_plan_arn
+                - backup_rule_id
+                - creation_date
+                - completion_date
+                - expected_completion_date
+                - job_run_time
+                - backup_size_in_bytes
+                - source_recoverypoint_arn
+                - source_backupvault_arn
+                - destination_recoverypoint_arn
+                - destination_backupvault_arn                
+                - iam_role_arn
+                - region_partition_id
+                - account_partition_id                
+                - year
+                - month
+                - day
+                - report_name
+                - trimReportStartDate
+                - trimReportEndDate                
+            Source:
+              PhysicalTableId: CopyJobReportPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY    
+     
+  ControlComplianceReportDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'ControlComplianceReportDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "ControlComplianceReportDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          ControlComplianceReportPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: framework_name
+                    Type: STRING        
+                  - Name: framework_description
+                    Type: STRING        
+                  - Name: control_name
+                    Type: STRING    
+                  - Name: control_compliance_status
+                    Type: STRING        
+                  - Name: last_evaluation_time
+                    Type: STRING        
+                  - Name: compliant_resource_count
+                    Type: STRING        
+                  - Name: non_compliant_resource_count
+                    Type: STRING
+                  - Name: control_frequency
+                    Type: STRING        
+                  - Name: control_scope
+                    Type: STRING        
+                  - Name: control_parameters
+                    Type: STRING                    
+                  - Name: region_partition_id
+                    Type: STRING       
+                  - Name: account_partition_id
+                    Type: STRING  
+                  - Name: year
+                    Type: STRING  
+                  - Name: month
+                    Type: STRING  
+                  - Name: day
+                    Type: STRING  
+                  - Name: report_name
+                    Type: STRING    
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'control_compliance_report' 
+              SqlQuery: 'select * from aws_backup_logs_db.control_compliance_report'
+      LogicalTableMap:
+          ControlComplianceReportLogicalTable:
+            Alias: ControlComplianceReportDS
+            DataTransforms:
+            - CreateColumnsOperation: 
+                Columns:
+                  - ColumnName: trimLastEvalDate
+                    ColumnId: trimLastEvalDate-ControlComplianceReportDS
+                    Expression: "substring({last_evaluation_time},2,10)"            
+            - ProjectOperation:
+                ProjectedColumns:
+                - framework_name
+                - framework_description
+                - control_name
+                - control_compliance_status
+                - last_evaluation_time
+                - compliant_resource_count
+                - non_compliant_resource_count
+                - control_frequency
+                - control_scope
+                - control_parameters
+                - region_partition_id
+                - account_partition_id                
+                - year
+                - month
+                - day
+                - report_name
+                - trimLastEvalDate
+            Source:
+              PhysicalTableId: ControlComplianceReportPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY   
+      
+      
+  ResourceComplianceReportDS:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      Name: 'ResourceComplianceReportDS'
+      DataSetId: !Join
+                    - "-"
+                    - - "ResourceComplianceReportDS"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"        
+      AwsAccountId: !Ref AWS::AccountId
+      PhysicalTableMap:
+          ResourceComplianceReportPhysicalTable:
+            CustomSQL:
+              Columns: 
+                  - Name: framework_name
+                    Type: STRING        
+                  - Name: framework_description
+                    Type: STRING        
+                  - Name: control_name
+                    Type: STRING        
+                  - Name: resource_id
+                    Type: STRING        
+                  - Name: resource_type
+                    Type: STRING        
+                  - Name: resource_compliance_status
+                    Type: STRING        
+                  - Name: last_evaluation_time
+                    Type: STRING
+                  - Name: region_partition_id
+                    Type: STRING       
+                  - Name: account_partition_id
+                    Type: STRING  
+                  - Name: year
+                    Type: STRING  
+                  - Name: month
+                    Type: STRING  
+                  - Name: day
+                    Type: STRING  
+                  - Name: report_name
+                    Type: STRING                       
+              DataSourceArn: !GetAtt ObserverQSDataSource.Arn
+              Name: 'resource_compliance_report' 
+              SqlQuery: 'select * from aws_backup_logs_db.resource_compliance_report'
+      LogicalTableMap:
+          ResourceComplianceReportLogicalTable:
+            Alias: ResourceComplianceReportDS
+            DataTransforms:
+            - CreateColumnsOperation: 
+                Columns:
+                  - ColumnName: trimLastEvalDate
+                    ColumnId: trimLastEvalDate-ControlComplianceReportDS
+                    Expression: "substring({last_evaluation_time},2,10)"
+            - ProjectOperation:
+                ProjectedColumns:
+                - framework_name
+                - framework_description
+                - control_name
+                - resource_id
+                - resource_type
+                - resource_compliance_status                
+                - last_evaluation_time                
+                - region_partition_id
+                - account_partition_id                
+                - year
+                - month
+                - day
+                - report_name
+                - trimLastEvalDate
+            Source:
+              PhysicalTableId: ResourceComplianceReportPhysicalTable
+      Permissions:
+          - Principal: !Join
+              - ''
+              - - !Sub 'arn:${AWS::Partition}:quicksight:'
+                - !Ref QuickSightIdentityRegion
+                - ':'
+                - !Ref AWS::AccountId
+                - ':user/default/'
+                - !Ref QuickSightUser
+            Actions:
+              - quicksight:UpdateDataSetPermissions
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+      ImportMode: DIRECT_QUERY   
+      
+  ObserverQSTheme:
+    Type: AWS::QuickSight::Theme
+    Properties:
+      ThemeId: !Join
+                    - "-"
+                    - - "BoS-For-AWSBackup-Theme"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"
+      Name: 'BoS-For-AWSBackup-Theme'
+      AwsAccountId: !Ref AWS::AccountId
+      BaseThemeId: SEASIDE
+      Configuration:
+        UIColorPalette:
+          PrimaryBackground: '#EEEEEE'
+          SecondaryBackground: '#EEEEEE'
+      Permissions:
+        - Principal: !Join
+            - ''
+            - - !Sub 'arn:${AWS::Partition}:quicksight:'
+              - !Ref QuickSightIdentityRegion
+              - ':'
+              - !Ref AWS::AccountId
+              - ':user/default/'
+              - !Ref QuickSightUser
+          Actions:
+            - quicksight:UpdateThemeAlias
+            - quicksight:ListThemeVersions
+            - quicksight:UpdateThemePermissions
+            - quicksight:DescribeThemeAlias
+            - quicksight:DeleteThemeAlias
+            - quicksight:DeleteTheme
+            - quicksight:ListThemeAliases
+            - quicksight:DescribeTheme
+            - quicksight:CreateThemeAlias
+            - quicksight:UpdateTheme
+            - quicksight:DescribeThemePermissions
+      VersionDescription: Initial version
+
+  ObserverQSTemplate:
+    Type: AWS::QuickSight::Template
+    Properties:
+      TemplateId: !Join
+                    - "-"
+                    - - "BoS-For-AWSBackup-Template"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"
+      Name: 'BoS-For-AWSBackup-Template'
+      AwsAccountId: !Ref AWS::AccountId
+      SourceEntity:
+        SourceTemplate:
+          Arn: !Sub 'arn:${AWS::Partition}:quicksight:us-west-2:166211809176:template/BoS-For-AWSBackup-Template-20-Oct-2021-Shareable'
+      Permissions:
+        - Principal: !Join
+            - ''
+            - - !Sub 'arn:${AWS::Partition}:quicksight:'
+              - !Ref QuickSightIdentityRegion
+              - ':'
+              - !Ref AWS::AccountId
+              - ':user/default/'
+              - !Ref QuickSightUser
+          Actions:
+            - quicksight:DescribeTemplate
+      VersionDescription: Observer for AWS Backup Initial Version
+
+  ObserverQSAnalysis:
+    Type: AWS::QuickSight::Analysis
+    Properties:
+      Name: 'BoS-For-AWSBackup-Analysis'
+      AnalysisId: !Join
+                    - "-"
+                    - - "BoS-For-AWSBackup-Analysis"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"
+      AwsAccountId: !Ref AWS::AccountId
+      SourceEntity:
+        SourceTemplate:
+          Arn: !GetAtt ObserverQSTemplate.Arn
+          DataSetReferences:
+            - DataSetPlaceholder: BackupJobDS
+              DataSetArn: !GetAtt BackupJobDS.Arn
+            - DataSetPlaceholder: BackupJobReportDS
+              DataSetArn: !GetAtt BackupJobReportDS.Arn
+            - DataSetPlaceholder: RestoreJobDS
+              DataSetArn: !GetAtt RestoreJobDS.Arn
+            - DataSetPlaceholder: RestoreJobReportDS
+              DataSetArn: !GetAtt RestoreJobReportDS.Arn
+            - DataSetPlaceholder: CopyJobDS
+              DataSetArn: !GetAtt CopyJobDS.Arn
+            - DataSetPlaceholder: CopyJobReportDS
+              DataSetArn: !GetAtt CopyJobReportDS.Arn
+            - DataSetPlaceholder: ConfigDS
+              DataSetArn: !GetAtt ConfigDS.Arn
+            - DataSetPlaceholder: ControlComplianceReportDS
+              DataSetArn: !GetAtt ControlComplianceReportDS.Arn              
+            - DataSetPlaceholder: ResourceComplianceReportDS
+              DataSetArn: !GetAtt ResourceComplianceReportDS.Arn              
+      Permissions:
+        - Principal: !Join
+            - ''
+            - - !Sub 'arn:${AWS::Partition}:quicksight:'
+              - !Ref QuickSightIdentityRegion
+              - ':'
+              - !Ref AWS::AccountId
+              - ':user/default/'
+              - !Ref QuickSightUser
+          Actions:
+            - quicksight:RestoreAnalysis
+            - quicksight:UpdateAnalysisPermissions
+            - quicksight:DeleteAnalysis
+            - quicksight:DescribeAnalysisPermissions
+            - quicksight:QueryAnalysis
+            - quicksight:DescribeAnalysis
+            - quicksight:UpdateAnalysis
+      ThemeArn: !GetAtt ObserverQSTheme.Arn
+
+  ObserverQSDashboard:
+    Type: AWS::QuickSight::Dashboard
+    Properties:
+      Name: 'BoS-For-AWSBackup-Dashboard'
+      DashboardId: !Join
+                    - "-"
+                    - - "BoS-For-AWSBackup-Dashboard"
+                      - !Select
+                        - 0
+                        - !Split
+                          - "-"
+                          - !Select
+                            - 2
+                            - !Split
+                              - "/"
+                              - !Ref "AWS::StackId"
+      AwsAccountId: !Ref AWS::AccountId
+      SourceEntity:
+        SourceTemplate:
+          Arn: !GetAtt ObserverQSTemplate.Arn
+          DataSetReferences:
+            - DataSetPlaceholder: BackupJobDS
+              DataSetArn: !GetAtt BackupJobDS.Arn
+            - DataSetPlaceholder: BackupJobReportDS
+              DataSetArn: !GetAtt BackupJobReportDS.Arn
+            - DataSetPlaceholder: RestoreJobDS
+              DataSetArn: !GetAtt RestoreJobDS.Arn
+            - DataSetPlaceholder: RestoreJobReportDS
+              DataSetArn: !GetAtt RestoreJobReportDS.Arn
+            - DataSetPlaceholder: CopyJobDS
+              DataSetArn: !GetAtt CopyJobDS.Arn
+            - DataSetPlaceholder: CopyJobReportDS
+              DataSetArn: !GetAtt CopyJobReportDS.Arn
+            - DataSetPlaceholder: ConfigDS
+              DataSetArn: !GetAtt ConfigDS.Arn
+            - DataSetPlaceholder: ControlComplianceReportDS
+              DataSetArn: !GetAtt ControlComplianceReportDS.Arn              
+            - DataSetPlaceholder: ResourceComplianceReportDS
+              DataSetArn: !GetAtt ResourceComplianceReportDS.Arn
+      Permissions:
+        - Principal: !Join
+            - ''
+            - - !Sub 'arn:${AWS::Partition}:quicksight:'
+              - !Ref QuickSightIdentityRegion
+              - ':'
+              - !Ref AWS::AccountId
+              - ':user/default/'
+              - !Ref QuickSightUser
+          Actions:
+            - quicksight:DescribeDashboard
+            - quicksight:ListDashboardVersions
+            - quicksight:UpdateDashboardPermissions
+            - quicksight:QueryDashboard
+            - quicksight:UpdateDashboard
+            - quicksight:DeleteDashboard
+            - quicksight:DescribeDashboardPermissions
+            - quicksight:UpdateDashboardPublishedVersion
+      ThemeArn: !GetAtt ObserverQSTheme.Arn
+      DashboardPublishOptions:
+        AdHocFilteringOption:
+          AvailabilityStatus: DISABLED

@@ -1,0 +1,5 @@
+StartDate,EndDate,Tags,UnblendedCost
+2022-06-01,2022-07-01,Department,0.0082423967
+2022-06-01,2022-07-01,Environment,0.0082423967
+2022-06-01,2022-07-01,Name,0.0082423967
+2022-06-01,2022-07-01,aws:backup:source-resource,0.0082423967

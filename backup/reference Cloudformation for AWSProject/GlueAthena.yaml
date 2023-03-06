@@ -1,0 +1,82 @@
+Resources:
+  MyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        ['arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole']
+      Policies:         
+          - PolicyName: s3Permissions
+            PolicyDocument:
+              Statement:
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:Encrypt                  
+                  - s3:PutObject*
+                  - s3:GetObject*
+                  - s3:DeleteObject
+                  - s3:*BucketNotification
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:ListMultipartUploadParts
+                  - s3:AbortMultipartUpload 
+                Resource: 
+                  "arn:aws:s3:::new-backup-report-based-arn-tags-744878436330/*"
+
+ 
+  MyDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: "dbcrawler1"
+        Description: "TestDatabaseDescription"
+        LocationUri: "TestLocationUri"
+        # Parameters:
+        #   key1 : "value1"
+        #   key2 : "value2"
+ 
+  # MyClassifier:
+  #   Type: AWS::Glue::Classifier
+  #   Properties:
+  #     GrokClassifier:
+  #       Name: "CrawlerClassifier"
+  #       Classification: "wikiData"
+  #       GrokPattern: "%{NOTSPACE:language} %{NOTSPACE:page_title} %{NUMBER:hits:long} %{NUMBER:retrieved_size:long}"
+ 
+  # MyS3Bucket:
+  #   Type: AWS::S3::Bucket
+  #   Properties:
+  #     BucketName: "new-backup-report-based-arn-tags-744878436330"
+  #     AccessControl: "BucketOwnerFullControl"
+ 
+  MyCrawler2:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: "testcrawler2"
+      Role: !GetAtt MyRole.Arn
+      DatabaseName: !Ref MyDatabase
+      Targets:
+        S3Targets:
+          - Exclusions: 
+            - "*.json"
+            - "json"
+          - Path: "s3://new-backup-report-based-arn-tags-744878436330"
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Schedule:
+        ScheduleExpression: "cron(0 12 * * ? *)"

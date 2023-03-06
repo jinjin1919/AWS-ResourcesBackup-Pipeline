@@ -1,0 +1,286 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  QuickSightIdentityRegion:
+    Type: String
+    MinLength: 1
+    Description: Enter the region where QuickSight identity is configured.
+  QuickSightUser:
+    Type: String
+    MinLength: 1
+    Description: Enter the username of QuickSight author/admin from default namespace.
+
+Resources:
+  DataSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      Name: !Join [ '', [ 'datasource-' , !Ref 'AWS::AccountId'] ]
+      DataSourceId: !Join [ '', [ 'unique-datasource-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      Type: ATHENA
+      DataSourceParameters:
+        AthenaParameters:
+          WorkGroup: default
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:UpdateDataSourcePermissions'
+            - 'quicksight:DescribeDataSource'
+            - 'quicksight:DescribeDataSourcePermissions'
+            - 'quicksight:PassDataSource'
+            - 'quicksight:UpdateDataSource'
+            - 'quicksight:DeleteDataSource'
+    
+  CostDataSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      Name: !Join [ '', [ 'cost-datasource-' , !Ref 'AWS::AccountId'] ]
+      DataSourceId: !Join [ '', [ 'cost-unique-datasource-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      Type: ATHENA
+      DataSourceParameters:
+        AthenaParameters:
+          WorkGroup: default
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:UpdateDataSourcePermissions'
+            - 'quicksight:DescribeDataSource'
+            - 'quicksight:DescribeDataSourcePermissions'
+            - 'quicksight:PassDataSource'
+            - 'quicksight:UpdateDataSource'
+            - 'quicksight:DeleteDataSource'
+
+  DataSet:
+    Type: 'AWS::QuickSight::DataSet'
+    Properties:
+      Name: !Join [ '', [ 'dataset-' , !Ref 'AWS::AccountId'] ]
+      DataSetId: !Join [ '', [ 'unique-dataset-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      IngestionWaitPolicy: 
+        IngestionWaitTimeInHours: 6
+        WaitForSpiceIngestion: true
+      PhysicalTableMap:
+        BackupPhysicalTable:
+          CustomSQL:
+            Columns:
+              - Name: CreationDate
+                Type: DATETIME
+              - Name: CompletionDate
+                Type: DATETIME
+              - Name: ResourceArn
+                Type: STRING
+              - Name: ResourceType
+                Type: STRING
+              - Name: BackupSize
+                Type: DECIMAL
+              - Name: TagKey
+                Type: STRING
+              - Name: TagValue
+                Type: STRING
+            DataSourceArn: !GetAtt DataSource.Arn
+            Name: "backup-report"
+            SqlQuery: !Join [ '', [ 'SELECT * FROM "database_' , !Ref 'AWS::AccountId', '"."backup_report"' ] ]
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:UpdateDataSetPermissions'
+            - 'quicksight:DescribeDataSet'
+            - 'quicksight:DescribeDataSetPermissions'
+            - 'quicksight:PassDataSet'
+            - 'quicksight:DescribeIngestion'
+            - 'quicksight:ListIngestions'
+            - 'quicksight:UpdateDataSet'
+            - 'quicksight:DeleteDataSet'
+            - 'quicksight:CreateIngestion'
+            - 'quicksight:CancelIngestion'
+      ImportMode: SPICE
+
+  CostDataSet:
+    Type: 'AWS::QuickSight::DataSet'
+    Properties:
+      Name: !Join [ '', [ 'cost-dataset-' , !Ref 'AWS::AccountId'] ]
+      DataSetId: !Join [ '', [ 'cost-unique-dataset-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      IngestionWaitPolicy: 
+        IngestionWaitTimeInHours: 6
+        WaitForSpiceIngestion: true
+      PhysicalTableMap:
+        CostPhysicalTable:
+          CustomSQL:
+            Columns:
+              - Name: Start
+                Type: DATETIME
+              - Name: End
+                Type: DATETIME
+              - Name: Tags
+                Type: STRING
+              - Name: UnblendedCost
+                Type: DECIMAL
+            DataSourceArn: !GetAtt CostDataSource.Arn
+            Name: "cost-report"
+            SqlQuery: !Join [ '', [ 'SELECT * FROM "cost_database_' , !Ref 'AWS::AccountId', '"."cost_report"' ] ]
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:UpdateDataSetPermissions'
+            - 'quicksight:DescribeDataSet'
+            - 'quicksight:DescribeDataSetPermissions'
+            - 'quicksight:PassDataSet'
+            - 'quicksight:DescribeIngestion'
+            - 'quicksight:ListIngestions'
+            - 'quicksight:UpdateDataSet'
+            - 'quicksight:DeleteDataSet'
+            - 'quicksight:CreateIngestion'
+            - 'quicksight:CancelIngestion'
+      ImportMode: SPICE
+
+  Template:
+      Type: 'AWS::QuickSight::Template'
+      Properties:
+        TemplateId: !Join [ '', [ 'unique-template-' , !Ref 'AWS::AccountId'] ]
+        Name: !Join [ '', [ 'template-' , !Ref 'AWS::AccountId'] ]
+        AwsAccountId: !Ref 'AWS::AccountId'
+        SourceEntity:
+          SourceTemplate:
+            Arn: !Sub 'arn:${AWS::Partition}:quicksight:us-east-1:263675971756:template/sharable-template-for-backup-in-quicksight'
+        Permissions:
+          - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+            Actions:
+              - 'quicksight:DescribeTemplate'
+              - 'quicksight:UpdateTemplatePermissions'
+              - 'quicksight:DescribeTemplatePermissions'
+              - 'quicksight:UpdateTemplateAlias'
+              - 'quicksight:DeleteTemplateAlias'
+              - 'quicksight:DescribeTemplateAlias'
+              - 'quicksight:ListTemplateAliases'
+              - 'quicksight:ListTemplates'
+              - 'quicksight:CreateTemplateAlias'
+              - 'quicksight:DeleteTemplate'
+              - 'quicksight:UpdateTemplate'
+              - 'quicksight:ListTemplateVersions'
+              - 'quicksight:DescribeTemplate'
+              - 'quicksight:CreateTemplate'
+
+  Analysis:
+    Type: 'AWS::QuickSight::Analysis'
+    Properties:
+      Name: !Join [ '', [ 'analysis-' , !Ref 'AWS::AccountId'] ]
+      AnalysisId: !Join [ '', [ 'unique-analysis-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      SourceEntity:
+        SourceTemplate:
+          Arn: !GetAtt Template.Arn
+          DataSetReferences:
+          - DataSetPlaceholder: BackupData
+            DataSetArn: !GetAtt DataSet.Arn
+          - DataSetPlaceholder: CostData
+            DataSetArn: !GetAtt CostDataSet.Arn
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:RestoreAnalysis'
+            - 'quicksight:UpdateAnalysisPermissions'
+            - 'quicksight:DeleteAnalysis'
+            - 'quicksight:DescribeAnalysisPermissions'
+            - 'quicksight:QueryAnalysis'
+            - 'quicksight:DescribeAnalysis'
+            - 'quicksight:UpdateAnalysis'
+
+  Dashboard:
+    Type: 'AWS::QuickSight::Dashboard'
+    Properties:
+      Name: !Join [ '', [ 'dashboard-' , !Ref 'AWS::AccountId'] ]
+      DashboardId: !Join [ '', [ 'unique-dashboard-' , !Ref 'AWS::AccountId'] ]
+      AwsAccountId: !Ref 'AWS::AccountId'
+      SourceEntity:
+        SourceTemplate:
+          Arn: !GetAtt Template.Arn
+          DataSetReferences:
+            - DataSetPlaceholder: BackupData
+              DataSetArn: !GetAtt DataSet.Arn
+            - DataSetPlaceholder: CostData
+              DataSetArn: !GetAtt CostDataSet.Arn
+      Permissions:
+        - Principal: !Join [ '', [ 'arn:aws:quicksight:us-east-1:' , !Ref 'AWS::AccountId', ':user/default/',!Ref 'QuickSightUser' ] ]
+          Actions:
+            - 'quicksight:DescribeDashboard'
+            - 'quicksight:ListDashboardVersions'
+            - 'quicksight:UpdateDashboardPermissions'
+            - 'quicksight:QueryDashboard'
+            - 'quicksight:UpdateDashboard'
+            - 'quicksight:DeleteDashboard'
+            - 'quicksight:DescribeDashboardPermissions'
+            - 'quicksight:UpdateDashboardPublishedVersion'
+
+  QuicksightPermissionForEventsToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref QuicksightLambdaFunctions
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt QuicksightRefreshSchedule.Arn
+
+  QuicksightRefreshSchedule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: Trigger Lambda
+      Name: QuicksightRefreshSchedule
+      ScheduleExpression: cron(0 */12 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt
+          - QuicksightLambdaFunctions
+          - Arn
+          Id: QuicksightRefreshSchedule
+    
+  QuicksightBackupRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service: quicksight.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AdministratorAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  QuicksightLambdaFunctions:
+    Type: 'AWS::Lambda::Function'
+    Properties: 
+      Handler: quicksight/lambda_function.lambda_handler
+      Role: !GetAtt 
+      - QuicksightBackupRole
+      - Arn
+      Code:
+        S3Bucket: bucket-for-my-function
+        S3Key: quicksight.zip
+      Environment: 
+        Variables:
+          ConfigDataRefreshScheduleName: QuicksightRefreshSchedule
+      Runtime: python3.9
+      Timeout: 300
+  
+  QuicksightTriggerLambdaFunction:
+    Type: Custom::QuicksightTriggerLambdaFunction
+    Properties:
+      ServiceToken: !GetAtt QuicksightLambdaFunctions.Arn
+
+
